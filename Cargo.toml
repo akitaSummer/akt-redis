@@ -15,6 +15,7 @@ tokio-stream = "0.1"
 tracing = "0.1.13"
 tracing-futures = { version = "0.2.3" }
 tracing-subscriber = "0.2.2"
+redis-protocol = "3.1.0"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

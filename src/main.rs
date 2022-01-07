@@ -1,5 +1,7 @@
+mod connection;
 mod db;
 mod server;
+mod types;
 
 use std::io;
 use tokio::net::TcpListener;
