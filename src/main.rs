@@ -1,5 +1,7 @@
+mod command;
 mod connection;
 mod db;
+mod parse;
 mod server;
 mod types;
 

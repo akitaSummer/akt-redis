@@ -1,5 +1,6 @@
 use redis_protocol::resp2::prelude::*;
 
+use crate::types::Result;
 use bytes::{Buf, BytesMut};
 use std::io::{self, Cursor};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
@@ -16,6 +17,33 @@ impl Connection {
         Connection {
             stream: BufWriter::new(socket),
             buffer: BytesMut::with_capacity(4 * 1024),
+        }
+    }
+
+    pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
+        loop {
+            if let Some(frame) = self.parse_frame()? {
+                return Ok(Some(frame));
+            }
+
+            // 0 时为结束流
+            if 0 == self.stream.read_buf(&mut self.buffer).await? {
+                if self.buffer.is_empty() {
+                    return Ok(None);
+                    // 缓冲区不为空时则对方关闭了流
+                } else {
+                    return Err("connection reset by peer".into());
+                }
+            }
+        }
+    }
+
+    fn parse_frame(&mut self) -> Result<Option<Frame>> {
+        let mut buf = &self.buffer[..];
+        match decode(&buf) {
+            Ok(Some((f, _))) => Ok(Some(f)),
+            Ok(None) => Ok(None),
+            Err(e) => panic!("Error parsing bytes: {:?}", e),
         }
     }
 
