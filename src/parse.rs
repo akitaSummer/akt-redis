@@ -43,7 +43,7 @@ impl Parse {
     pub fn new(frame: Frame) -> Result<Parse, ParseError> {
         let array = match frame {
             Frame::Array(array) => array,
-            frame => return Err(format!("protocol error; expected array, got {:?}", frame)),
+            frame => return Err(format!("protocol error; expected array, got {:?}", frame).into()),
         };
 
         Ok(Parse {
@@ -65,7 +65,8 @@ impl Parse {
             frame => Err(format!(
                 "protocol error; expected simple frame or bulk frame, got {:?}",
                 frame
-            )),
+            )
+            .into()),
         }
     }
 

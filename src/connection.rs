@@ -41,7 +41,10 @@ impl Connection {
     fn parse_frame(&mut self) -> Result<Option<Frame>> {
         let mut buf = &self.buffer[..];
         match decode(&buf) {
-            Ok(Some((f, _))) => Ok(Some(f)),
+            Ok(Some((f, _))) => {
+                self.buffer.clear();
+                Ok(Some(f))
+            }
             Ok(None) => Ok(None),
             Err(e) => panic!("Error parsing bytes: {:?}", e),
         }

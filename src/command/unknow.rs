@@ -11,7 +11,7 @@ pub struct Unknown {
 }
 
 impl Unknown {
-    pub fn new(key: impl ToString) -> Unknown {
+    pub fn new<T: ToString>(key: T) -> Unknown {
         Unknown {
             command_name: key.to_string(),
         }
@@ -22,7 +22,7 @@ impl Unknown {
 
     // 返回消息表示不认识命令
     #[instrument(skip(self, dst))]
-    pub async fn apply(self, dst: &mut Connection) -> Result<()> {
+    pub async fn apply(&self, dst: &mut Connection) -> Result<()> {
         let response = Frame::Error(format!("ERR unknown command '{}'", self.command_name));
 
         debug!(?response);

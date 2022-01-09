@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::Notify;
 use tokio::time::{self, Duration, Instant};
 
 #[derive(Debug)]
@@ -47,6 +47,52 @@ impl Db {
         tokio::spawn(purge_expired_tasks(shared.clone()));
 
         Db { shared }
+    }
+
+    pub fn get(&self, key: &str) -> Option<Bytes> {
+        let state = self.shared.state.lock().unwrap();
+        state.entries.get(key).map(|entry| entry.data.clone())
+    }
+
+    pub fn set(&self, key: String, value: Bytes, expire: Option<Duration>) {
+        let state = &mut self.shared.state.lock().unwrap();
+        let id = state.next_id;
+        state.next_id += 1;
+        let mut notify = false;
+
+        let expires_at = expire.map(|duration| {
+            let when = Instant::now() + duration;
+
+            notify = state
+                .next_expiration()
+                .map(|expiration| expiration > when)
+                .unwrap_or(true);
+
+            state.expirations.insert((when, id), key.clone());
+            when
+        });
+
+        let prev = state.entries.insert(
+            key,
+            Entry {
+                id,
+                data: value,
+                expires_at,
+            },
+        );
+
+        // 如果之前存在，则需删除之前储存值
+        if let Some(prev) = prev {
+            if let Some(when) = prev.expires_at {
+                state.expirations.remove(&(when, prev.id));
+            }
+        }
+
+        drop(state);
+
+        if notify {
+            self.shared.background_task.notify_one();
+        }
     }
 
     // 通知清除后台
@@ -109,6 +155,15 @@ struct State {
 
     // 后台是否在退出
     shutdown: bool,
+}
+
+impl State {
+    fn next_expiration(&self) -> Option<Instant> {
+        self.expirations
+            .keys()
+            .next()
+            .map(|expiration| expiration.0)
+    }
 }
 
 #[derive(Debug)]
