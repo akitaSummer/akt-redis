@@ -40,6 +40,7 @@ impl Connection {
 
     fn parse_frame(&mut self) -> Result<Option<Frame>> {
         let mut buf = &self.buffer[..];
+        // 正常情况下应自己解析，偷懒用了库
         match decode(&buf) {
             Ok(Some((f, _))) => {
                 self.buffer.clear();
