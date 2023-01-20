@@ -13,6 +13,10 @@ func Accept(fd int) (int, error) {
 	return nfd, err
 }
 
+func Close(fd int) {
+	unix.Close(fd)
+}
+
 func Connect(host [4]byte, port int) (int, error) {
 	// 创建socket
 	s, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, 0)
@@ -63,4 +67,8 @@ func TcpServer(port int) (int, error) {
 		return -1, nil
 	}
 	return s, nil
+}
+
+func Read(fd int, buf []byte) (int, error) {
+	return 0, nil
 }
