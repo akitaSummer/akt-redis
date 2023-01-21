@@ -72,3 +72,7 @@ func TcpServer(port int) (int, error) {
 func Read(fd int, buf []byte) (int, error) {
 	return 0, nil
 }
+
+func Write(fd int, buf []byte) (int, error) {
+	return unix.Write(fd, buf)
+}

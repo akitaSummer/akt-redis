@@ -18,7 +18,7 @@ type List struct {
 	ListType
 	Head   *Node
 	Tail   *Node
-	Length int
+	length int
 }
 
 func ListCreate(listType ListType) *List {
@@ -39,8 +39,16 @@ func (list *List) Append(val *obj.Gobj) {
 		list.Tail.next = &node
 		list.Tail = &node
 	}
-	list.Length += 1
+	list.length += 1
 }
 
 func (list *List) DelNode(n *Node) {
+}
+
+func (list *List) Length() int {
+	return list.length
+}
+
+func (list *List) First() *Node {
+	return list.Head
 }

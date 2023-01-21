@@ -8,6 +8,7 @@ import (
 	"akt-redis/net"
 	"akt-redis/obj"
 	"errors"
+	"strings"
 	"time"
 
 	"hash/fnv"
@@ -52,9 +53,33 @@ type GodisClient struct {
 	cmdType  CmdType
 	bulkNum  int
 	bulkLen  int
+	sentLen  int
+}
+
+type CommandProc func(client *GodisClient)
+
+type GodisCommand struct {
+	name  string
+	proc  CommandProc
+	arity int // 参数个数
+}
+
+func (client *GodisClient) findLineInQuery() (int, error) {
+	index := strings.Index(string(client.queryBuf[:client.queryLen]), "\r\n")
+	if index < 0 && client.queryLen > GODIS_MAX_INLINE {
+		return index, errors.New("too big inline cmd")
+	}
+	return index, nil
 }
 
 var server GodisServer
+
+var cmdTable []GodisCommand = []GodisCommand{
+	{"get", func(client *GodisClient) {}, 2},
+	{"set", func(client *GodisClient) {}, 3},
+	{"expire", func(client *GodisClient) {}, 3},
+	//TODO
+}
 
 func GStrEqual(a, b *obj.Gobj) bool {
 	if a.Type_ != obj.GSTR || b.Type_ != obj.GSTR {
@@ -96,7 +121,7 @@ func freeArgs(client *GodisClient) {
 }
 
 func freeReplyList(client *GodisClient) {
-	for client.reply.Length != 0 {
+	for client.reply.Length() != 0 {
 		n := client.reply.Head
 		client.reply.DelNode(n)
 		n.Val.DecrRefCount()
@@ -114,12 +139,96 @@ func freeClient(client *GodisClient) {
 	net.Close(client.fd)
 }
 
-func ProcessCommand(c *GodisClient) {
-	// TODO
+// 通知client
+func SendReplyToClient(loop *ae.AeLoop, fd int, extra interface{}) {
+	client := extra.(*GodisClient)
+	log.Printf("SendReplyToClient, reply len:%v\n", client.reply.Length())
+	for client.reply.Length() > 0 {
+		rep := client.reply.First()
+		buf := []byte(rep.Val.StrVal())
+		bufLen := len(buf)
+		if client.sentLen < bufLen {
+			n, err := net.Write(fd, buf[client.sentLen:])
+			if err != nil {
+				log.Printf("send reply err: %v\n", err)
+				freeClient(client)
+				return
+			}
+			client.sentLen += n
+			log.Printf("send %v bytes to client:%v\n", n, client.fd)
+			if client.sentLen == bufLen {
+				client.reply.DelNode(rep)
+				rep.Val.DecrRefCount()
+				client.sentLen = 0
+			} else {
+				break
+			}
+		}
+	}
+	if client.reply.Length() == 0 {
+		client.sentLen = 0
+		loop.RemoveFileEvent(fd, ae.AE_WRITABLE)
+	}
+}
+
+func (c *GodisClient) AddReply(o *obj.Gobj) {
+	c.reply.Append(o)
+	o.IncrRefCount()
+	server.aeLoop.AddFileEvent(c.fd, ae.AE_WRITABLE, SendReplyToClient, c)
+}
+
+func (c *GodisClient) AddReplyStr(str string) {
+	o := obj.CreateObject(obj.GSTR, str)
+	c.AddReply(o)
+	o.DecrRefCount()
+}
+
+// 寻找对应的cmd
+func lookupCommand(cmdStr string) *GodisCommand {
+	for _, c := range cmdTable {
+		if c.name == cmdStr {
+			return &c
+		}
+	}
+	return nil
+}
+
+// 执行cmd
+func ProcessCommand(client *GodisClient) {
+	cmdStr := client.args[0].StrVal()
+	log.Printf("process command: %v\n", cmdStr)
+	if cmdStr == "quit" {
+		freeClient(client)
+		return
+	}
+	cmd := lookupCommand(cmdStr)
+	if cmd == nil {
+		client.AddReplyStr("-ERR: unknow command")
+		resetClient(client)
+		return
+	} else if cmd.arity != len(client.args) {
+		client.AddReplyStr("-ERR: wrong number of args")
+		resetClient(client)
+		return
+	}
+	cmd.proc(client)
+	resetClient(client)
 }
 
 func handleInlineBuf(client *GodisClient) (bool, error) {
-	// TODO
+	index, err := client.findLineInQuery()
+	if index < 0 {
+		return false, err
+	}
+
+	subs := strings.Split(string(client.queryBuf[:index]), " ")
+	client.queryBuf = client.queryBuf[index+2:]
+	client.queryLen -= index + 2
+	client.args = make([]*obj.Gobj, len(subs))
+
+	for i, v := range subs {
+		client.args[i] = obj.CreateObject(obj.GSTR, v)
+	}
 	return true, nil
 }
 
