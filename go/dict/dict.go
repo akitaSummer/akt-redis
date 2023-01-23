@@ -43,3 +43,14 @@ func (dict *Dict) RandomGet() *Entry {
 
 func (dict *Dict) RemoveKey(key *obj.Gobj) {
 }
+
+func (dict *Dict) Set(key *obj.Gobj, val *obj.Gobj) {
+}
+
+func (dict *Dict) Find(key *obj.Gobj) *Entry {
+	return nil
+}
+
+func (dict *Dict) Get(key *obj.Gobj) *obj.Gobj {
+	return nil
+}

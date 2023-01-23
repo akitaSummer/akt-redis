@@ -8,6 +8,8 @@ import (
 	"akt-redis/net"
 	"akt-redis/obj"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,7 +51,7 @@ type GodisClient struct {
 	args     []*obj.Gobj
 	reply    *list.List
 	queryBuf []byte
-	queryLen int
+	queryLen int // client.queryLen: 未处理的长度
 	cmdType  CmdType
 	bulkNum  int
 	bulkLen  int
@@ -72,13 +74,84 @@ func (client *GodisClient) findLineInQuery() (int, error) {
 	return index, nil
 }
 
+func (client *GodisClient) getNumInQuery(s, e int) (int, error) {
+	num, err := strconv.Atoi(string(client.queryBuf[s:e]))
+	client.queryBuf = client.queryBuf[e+2:]
+	client.queryLen -= e + 2
+	return num, err
+}
+
 var server GodisServer
 
 var cmdTable []GodisCommand = []GodisCommand{
-	{"get", func(client *GodisClient) {}, 2},
-	{"set", func(client *GodisClient) {}, 3},
-	{"expire", func(client *GodisClient) {}, 3},
-	//TODO
+	{"get", getCommand, 2},
+	{"set", setCommand, 3},
+	{"expire", expireCommand, 3},
+}
+
+// resp 协议返回值，返回给client
+// 通过首字符和结尾 "\r\n" 区分每一条命令
+// +: 简单string
+// -: error 如错误返回
+// :: int 如自增命令后的返回
+// $: string，"$4\r\ntest\r\n"后接数字，告诉string长度，\r\n后为string文本，可以包含换行符之类的字符
+// *: array 后接数字，表示数组长度
+
+func expireIfNeeded(key *obj.Gobj) {
+	entry := server.db.expire.Find(key)
+	if entry == nil {
+		return
+	}
+	when := entry.Val.IntVal()
+	if when > ae.GetMsTime() {
+		return
+	}
+	server.db.expire.Delete(key)
+	server.db.data.Delete(key)
+}
+
+func findKeyRead(key *obj.Gobj) *obj.Gobj {
+	expireIfNeeded(key)
+	return server.db.data.Get(key)
+}
+
+func getCommand(c *GodisClient) {
+	key := c.args[1]
+	val := findKeyRead(key)
+	if val == nil {
+		c.AddReplyStr("$-1\r\n")
+	} else if val.Type_ != obj.GSTR {
+		c.AddReplyStr("-ERR: wrong type\r\n")
+	} else {
+		str := val.StrVal()
+		c.AddReplyStr(fmt.Sprintf("$%d%v\r\n", len(str), str))
+	}
+}
+
+func setCommand(client *GodisClient) {
+	key := client.args[1]
+	val := client.args[2]
+
+	if val.Type_ != obj.GSTR {
+		client.AddReplyStr("-ERR: wrong type\r\n")
+	}
+
+	server.db.data.Set(key, val)
+	server.db.expire.Delete(key)
+	client.AddReplyStr("+OK\r\n")
+}
+
+func expireCommand(c *GodisClient) {
+	key := c.args[1]
+	val := c.args[2]
+	if val.Type_ != obj.GSTR {
+		c.AddReplyStr("-ERR: wrong type\r\n")
+	}
+	expire := ae.GetMsTime() + (val.IntVal() * 1000)
+	expObj := obj.CreateFromInt(expire)
+	server.db.expire.Set(key, expObj)
+	expObj.DecrRefCount()
+	c.AddReplyStr("+OK\r\n")
 }
 
 func GStrEqual(a, b *obj.Gobj) bool {
@@ -233,9 +306,67 @@ func handleInlineBuf(client *GodisClient) (bool, error) {
 }
 
 func handleBulkBuf(client *GodisClient) (bool, error) {
-	// TODO
+	// init bulkNum
+	if client.bulkNum == 0 {
+		index, err := client.findLineInQuery()
+		if index < 0 {
+			return false, err
+		}
+
+		bnum, err := client.getNumInQuery(1, index)
+		if err != nil {
+			return false, err
+		}
+		if bnum == 0 {
+			return true, nil
+		}
+		client.bulkNum = bnum
+		client.args = make([]*obj.Gobj, bnum)
+	}
+	// 读取所有 bulk string
+	for client.bulkNum > 0 {
+		// init bulkLen
+		if client.bulkLen == 0 {
+			index, err := client.findLineInQuery()
+			if index < 0 {
+				return false, err
+			}
+
+			if client.queryBuf[0] != '$' {
+				return false, errors.New("expect $ for bulk length")
+			}
+
+			blen, err := client.getNumInQuery(1, index)
+			if err != nil || blen == 0 {
+				return false, err
+			}
+			if blen > GODIS_MAX_BULK {
+				return false, errors.New("too big bulk")
+			}
+			client.bulkLen = blen
+		}
+		// read bulk string
+		if client.queryLen < client.bulkLen+2 {
+			return false, nil
+		}
+		index := client.bulkLen
+		// 判断结尾是否为\r\n
+		if client.queryBuf[index] != '\r' || client.queryBuf[index+1] != '\n' {
+			return false, errors.New("expect CRLF for bulk end")
+		}
+		client.args[len(client.args)-client.bulkNum] = obj.CreateObject(obj.GSTR, string(client.queryBuf[:index]))
+		client.queryBuf = client.queryBuf[index+2:]
+		client.queryLen -= index + 2
+		client.bulkLen = 0
+		client.bulkNum -= 1
+	}
+
 	return true, nil
 }
+
+// redis 命令
+// InLine: "set key val\r\n"
+// MuttiBulk: "*3\r\n$3\r\nset\r\n$3\r\nkey\r\n$3\r\nval\r\n"
 
 // 处理client query
 func ProcessQueryBuf(client *GodisClient) error {
@@ -271,7 +402,7 @@ func ProcessQueryBuf(client *GodisClient) error {
 				ProcessCommand(client)
 			}
 		} else {
-			// cmd incomplete
+			// 未读取完，下次再处理
 			break
 		}
 	}
@@ -280,6 +411,7 @@ func ProcessQueryBuf(client *GodisClient) error {
 
 func ReadQueryFromClient(loop *ae.AeLoop, fd int, extra interface{}) {
 	client := extra.(*GodisClient)
+	// 如果剩余大小不足GODIS_MAX_BULK，则扩容
 	if len(client.queryBuf)-client.queryLen < GODIS_MAX_BULK {
 		client.queryBuf = append(client.queryBuf, make([]byte, GODIS_MAX_BULK)...)
 	}
