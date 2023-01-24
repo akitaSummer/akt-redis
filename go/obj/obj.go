@@ -22,7 +22,7 @@ const (
 type Gobj struct {
 	Type_    Gtype
 	Val_     Gval
-	refCount int
+	RefCount int
 }
 
 func (obj *Gobj) IntVal() int64 {
@@ -44,7 +44,7 @@ func CreateFromInt(val int64) *Gobj {
 	return &Gobj{
 		Type_:    GSTR,
 		Val_:     strconv.FormatInt(val, 10),
-		refCount: 1,
+		RefCount: 1,
 	}
 }
 
@@ -52,17 +52,17 @@ func CreateObject(typ Gtype, ptr interface{}) *Gobj {
 	return &Gobj{
 		Type_:    typ,
 		Val_:     ptr,
-		refCount: 1,
+		RefCount: 1,
 	}
 }
 
 func (o *Gobj) IncrRefCount() {
-	o.refCount++
+	o.RefCount++
 }
 
 func (o *Gobj) DecrRefCount() {
-	o.refCount--
-	if o.refCount == 0 {
+	o.RefCount--
+	if o.RefCount == 0 {
 		// 垃圾回收自动回收Val_
 		o.Val_ = nil
 	}

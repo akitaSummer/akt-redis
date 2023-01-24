@@ -1,8 +1,8 @@
 package ae
 
 import (
+	"akt-redis/utils"
 	"log"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -84,7 +84,7 @@ func (loop *AeLoop) AeMain() {
 
 // 获取最近的时间
 func (loop *AeLoop) nearestTime() int64 {
-	var nearest int64 = GetMsTime() + 1000
+	var nearest int64 = utils.GetMsTime() + 1000
 	p := loop.TimeEvents
 	for p != nil {
 		if p.when < nearest {
@@ -98,7 +98,7 @@ func (loop *AeLoop) nearestTime() int64 {
 // 等待事件
 func (loop *AeLoop) AeWait() (tes []*AeTimeEvent, fes []*AeFileEvent) {
 	// 获取超时时间
-	timeout := loop.nearestTime() - GetMsTime()
+	timeout := loop.nearestTime() - utils.GetMsTime()
 	if timeout <= 0 {
 		timeout = 10 // at least wait 10ms
 	}
@@ -127,7 +127,7 @@ func (loop *AeLoop) AeWait() (tes []*AeTimeEvent, fes []*AeFileEvent) {
 		}
 	}
 	// 查询需要执行的事件
-	now := GetMsTime()
+	now := utils.GetMsTime()
 	p := loop.TimeEvents
 	for p != nil {
 		if p.when <= now {
@@ -145,7 +145,7 @@ func (loop *AeLoop) AeProcess(tes []*AeTimeEvent, fes []*AeFileEvent) {
 		if te.mask == AE_ONCE {
 			loop.RemoveTimeEvent(te.id)
 		} else {
-			te.when = GetMsTime() + te.interval
+			te.when = utils.GetMsTime() + te.interval
 		}
 	}
 
@@ -209,10 +209,6 @@ func (loop *AeLoop) RemoveFileEvent(fd int, mask FeType) {
 	log.Printf("ae remove file event fd:%v, mask:%v\n", fd, mask)
 }
 
-func GetMsTime() int64 {
-	return time.Now().UnixNano() / 1e6
-}
-
 func (loop *AeLoop) AddTimeEvent(mask TeType, interval int64, callback TimeCallback, extra interface{}) int {
 	id := loop.timeEventNextId
 	loop.timeEventNextId++
@@ -220,7 +216,7 @@ func (loop *AeLoop) AddTimeEvent(mask TeType, interval int64, callback TimeCallb
 		id:       id,
 		mask:     mask,
 		interval: interval,
-		when:     GetMsTime() + interval,
+		when:     utils.GetMsTime() + interval,
 		cb:       callback,
 		extra:    extra,
 		next:     loop.TimeEvents,

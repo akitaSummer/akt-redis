@@ -7,29 +7,15 @@ import (
 	"akt-redis/list"
 	"akt-redis/net"
 	"akt-redis/obj"
+	"akt-redis/utils"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
-	"hash/fnv"
 	"log"
 	"os"
-)
-
-type CmdType = byte
-
-const (
-	COMMAND_UNKNOWN CmdType = 0x00
-	COMMAND_INLINE  CmdType = 0x01
-	COMMAND_BULK    CmdType = 0x02
-)
-
-const (
-	GODIS_IO_BUF     int = 1024 * 16
-	GODIS_MAX_BULK   int = 1024 * 4
-	GODIS_MAX_INLINE int = 1024 * 4
 )
 
 type GodisDB struct {
@@ -52,7 +38,7 @@ type GodisClient struct {
 	reply    *list.List
 	queryBuf []byte
 	queryLen int // client.queryLen: 未处理的长度
-	cmdType  CmdType
+	cmdType  utils.CmdType
 	bulkNum  int
 	bulkLen  int
 	sentLen  int
@@ -68,7 +54,7 @@ type GodisCommand struct {
 
 func (client *GodisClient) findLineInQuery() (int, error) {
 	index := strings.Index(string(client.queryBuf[:client.queryLen]), "\r\n")
-	if index < 0 && client.queryLen > GODIS_MAX_INLINE {
+	if index < 0 && client.queryLen > utils.GODIS_MAX_INLINE {
 		return index, errors.New("too big inline cmd")
 	}
 	return index, nil
@@ -103,7 +89,7 @@ func expireIfNeeded(key *obj.Gobj) {
 		return
 	}
 	when := entry.Val.IntVal()
-	if when > ae.GetMsTime() {
+	if when > utils.GetMsTime() {
 		return
 	}
 	server.db.expire.Delete(key)
@@ -147,41 +133,25 @@ func expireCommand(c *GodisClient) {
 	if val.Type_ != obj.GSTR {
 		c.AddReplyStr("-ERR: wrong type\r\n")
 	}
-	expire := ae.GetMsTime() + (val.IntVal() * 1000)
+	expire := utils.GetMsTime() + (val.IntVal() * 1000)
 	expObj := obj.CreateFromInt(expire)
 	server.db.expire.Set(key, expObj)
 	expObj.DecrRefCount()
 	c.AddReplyStr("+OK\r\n")
 }
 
-func GStrEqual(a, b *obj.Gobj) bool {
-	if a.Type_ != obj.GSTR || b.Type_ != obj.GSTR {
-		return false
-	}
-	return a.StrVal() == b.StrVal()
-}
-
-func GStrHash(key *obj.Gobj) int64 {
-	if key.Type_ != obj.GSTR {
-		return 0
-	}
-	hash := fnv.New64()
-	hash.Write([]byte(key.StrVal()))
-	return int64(hash.Sum64())
-}
-
 func CreateClient(fd int) *GodisClient {
 	var client GodisClient
 	client.fd = fd
 	client.db = server.db
-	client.queryBuf = make([]byte, GODIS_IO_BUF)
-	client.reply = list.ListCreate(list.ListType{EqualFunc: GStrEqual})
+	client.queryBuf = make([]byte, utils.GODIS_IO_BUF)
+	client.reply = list.ListCreate(list.ListType{EqualFunc: utils.GStrEqual})
 	return &client
 }
 
 func resetClient(client *GodisClient) {
 	freeArgs(client)
-	client.cmdType = COMMAND_UNKNOWN
+	client.cmdType = utils.COMMAND_UNKNOWN
 	client.bulkLen = 0
 	client.bulkNum = 0
 }
@@ -340,7 +310,7 @@ func handleBulkBuf(client *GodisClient) (bool, error) {
 			if err != nil || blen == 0 {
 				return false, err
 			}
-			if blen > GODIS_MAX_BULK {
+			if blen > utils.GODIS_MAX_BULK {
 				return false, errors.New("too big bulk")
 			}
 			client.bulkLen = blen
@@ -372,20 +342,20 @@ func handleBulkBuf(client *GodisClient) (bool, error) {
 func ProcessQueryBuf(client *GodisClient) error {
 	// 不断取值
 	for len(client.queryBuf) > 0 {
-		if client.cmdType == COMMAND_UNKNOWN {
+		if client.cmdType == utils.COMMAND_UNKNOWN {
 			if client.queryBuf[0] == '*' {
-				client.cmdType = COMMAND_BULK
+				client.cmdType = utils.COMMAND_BULK
 			} else {
-				client.cmdType = COMMAND_INLINE
+				client.cmdType = utils.COMMAND_INLINE
 			}
 		}
 
 		// 读取内容转化为cmd args
 		var ok bool
 		var err error
-		if client.cmdType == COMMAND_INLINE {
+		if client.cmdType == utils.COMMAND_INLINE {
 			ok, err = handleInlineBuf(client)
-		} else if client.cmdType == COMMAND_BULK {
+		} else if client.cmdType == utils.COMMAND_BULK {
 			ok, err = handleBulkBuf(client)
 		} else {
 			return errors.New("unknow Godis Command Type")
@@ -412,8 +382,8 @@ func ProcessQueryBuf(client *GodisClient) error {
 func ReadQueryFromClient(loop *ae.AeLoop, fd int, extra interface{}) {
 	client := extra.(*GodisClient)
 	// 如果剩余大小不足GODIS_MAX_BULK，则扩容
-	if len(client.queryBuf)-client.queryLen < GODIS_MAX_BULK {
-		client.queryBuf = append(client.queryBuf, make([]byte, GODIS_MAX_BULK)...)
+	if len(client.queryBuf)-client.queryLen < utils.GODIS_MAX_BULK {
+		client.queryBuf = append(client.queryBuf, make([]byte, utils.GODIS_MAX_BULK)...)
 	}
 	n, err := net.Read(fd, client.queryBuf[client.queryLen:])
 
@@ -471,8 +441,8 @@ func initServer(config *conf.Config) error {
 	server.port = config.Port
 	server.clients = make(map[int]*GodisClient)
 	server.db = &GodisDB{
-		data:   dict.DictCreate(dict.DictType{HashFunc: GStrHash, EqualFunc: GStrEqual}),
-		expire: dict.DictCreate(dict.DictType{HashFunc: GStrHash, EqualFunc: GStrEqual}),
+		data:   dict.DictCreate(dict.DictType{HashFunc: utils.GStrHash, EqualFunc: utils.GStrEqual}),
+		expire: dict.DictCreate(dict.DictType{HashFunc: utils.GStrHash, EqualFunc: utils.GStrEqual}),
 	}
 	var err error
 	if server.aeLoop, err = ae.AeLoopCreate(); err != nil {
